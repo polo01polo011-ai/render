@@ -4,8 +4,7 @@
   "description": "سيرفر كشط متقدم مع Puppeteer و Stealth لـ Render",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "engines": {
     "node": "18.x"
@@ -15,17 +14,5 @@
     "puppeteer": "^22.6.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
-  },
-  "keywords": [
-    "scraper",
-    "puppeteer",
-    "stealth",
-    "render",
-    "proxy"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  }
 }
