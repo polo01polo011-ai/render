@@ -108,7 +108,7 @@ app.post('/scrape', async (req, res) => {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-gpu',
-                '--single-process',  // يقلل استخدام الذاكرة
+                '--single-process',
                 '--disable-extensions'
             ]
         });
@@ -134,12 +134,12 @@ app.post('/scrape', async (req, res) => {
         });
 
         // انتظار إضافي للـ AJAX
-        await page.waitForTimeout(3000);
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
         // جلب محتوى الصفحة
         const htmlContent = await page.content();
         
-        // محاولة استخراج الأسماء مباشرة (كحل احتياطي)
+        // محاولة استخراج الأسماء مباشرة
         const extractedNames = await page.evaluate(() => {
             const names = [];
             const text = document.body.innerText;
@@ -193,7 +193,6 @@ app.post('/scrape', async (req, res) => {
         return res.status(500).json({
             success: false,
             error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
             url: cleanUrl
         });
     }
