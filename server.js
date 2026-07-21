@@ -7,14 +7,14 @@ const fetch = globalThis.fetch || require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// الثقة بالـ Proxy لتحديد الـ IP الصحيح عبر Cloudflare Worker
+// الثقة بالـ Proxy لضبط مفتاح الـ IP الصحيح عبر Cloudflare Worker
 app.set('trust proxy', true);
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ذاكرة بسيطة جداً لمؤشر الـ Rate Limit لمنع الإغراق الإجباري
+// ذاكرة بسيطة جداً لمؤشر الـ Rate Limit لمنع الإغراق
 const rateLimitMap = new Map();
 setInterval(() => {
   const now = Date.now();
@@ -23,8 +23,8 @@ setInterval(() => {
   }
 }, 60000);
 
-// المسار الرئيسي لاستقبال طلبات البحث على جميع المسارات الممكنة: /, /lookup, /v1/lookup
-app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
+// دالة معالجة البحث الرئيسية
+async function handleLookup(req, res) {
   try {
     let query = req.query.query || (req.body && req.body.query);
 
@@ -42,19 +42,18 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
       });
     }
 
-    // --- 1. نظام الحماية IP (حد أدنى ثانيتين بين الطلبات) ---
+    // --- 1. نظام الحماية IP (ثانية واحدة بين الطلبات) ---
     const userIP = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
     const currentTime = Math.floor(Date.now() / 1000);
     const lastRequestTime = rateLimitMap.get(userIP) || 0;
 
-    if (currentTime - lastRequestTime < 2) {
-      const secondsLeft = 2 - (currentTime - lastRequestTime);
+    if (currentTime - lastRequestTime < 1) {
       return res.status(429).json({
         success: false,
         results: [],
         total: 0,
         error: 'مهلاً! الرجاء الانتظار',
-        message: `⏳ خطأ حماية: يرجى الانتظار ${secondsLeft} ثواني بين عمليات البحث المتتالية.`
+        message: '⏳ يرجى الانتظار بين عمليات البحث المتتالية.'
       });
     }
 
@@ -76,7 +75,7 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
 
     const scrapePhone = provider !== 'رقم دولي' ? '+967' + cleanPhone : '+' + cleanPhone;
 
-    // --- 3. الجلب المباشر المباشر والحي من الموقع ---
+    // --- 3. الجلب المباشر والحي من الموقع المصدر ---
     let names = [];
     let success = false;
     let lastError = null;
@@ -159,7 +158,10 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
       error: e.message
     });
   }
-});
+}
+
+// استقبال كافة المسارات الممكنة (كافة أنواع الـ Routing)
+app.all('*', handleLookup);
 
 // --- الدوال المساعدة لمسح وتحليل نص HTML المجلوب من الموقع ---
 
