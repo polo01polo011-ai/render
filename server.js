@@ -56,9 +56,8 @@ async function handleSearchRequest(req, res) {
   }
 }
 
-// المسارات الأساسية للسيرفر
+// ✅ المسار الأساسي - تم تعديله لمعالجة الاستعلامات
 app.get('/', (req, res) => {
-  // إذا احتوى الطلب الرئيسي على متغيرات يتم معالجته فوراً
   if (req.query.phone || req.query.query) {
     return handleSearchRequest(req, res);
   }
