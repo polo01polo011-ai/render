@@ -1,22 +1,24 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
+
+// استخدام fetch المدمج في Node.js
+const fetch = globalThis.fetch || require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// الثقة بالـ Proxy لمفتاح الـ IP الصحيح عبر Cloudflare
+// الثقة بالـ Proxy عبر Cloudflare
 app.set('trust proxy', true);
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ذاكرة مؤقتة بسيطة للـ Rate Limit وبديل لـ Cache
+// ذاكرة مؤقتة للـ Rate Limit والنتائج
 const rateLimitMap = new Map();
 const memoryCache = new Map();
 
-// تنظيف الذاكرة المؤقتة كل ساعة لمنع استهلاك الذاكرة
+// تنظيف الكاش دورياً
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of rateLimitMap.entries()) {
@@ -27,11 +29,16 @@ setInterval(() => {
   }
 }, 3600000);
 
-// المسار الرئيسي لاستقبال طلبات البحث
+// صفحة الرئيسية للاختبار
+app.get('/', (req, res) => {
+  res.send('Server is running successfully on Render!');
+});
+
+// المسار الرئيسي لاستقبال طلبات البحث (يقبل GET و POST)
 app.all('/v1/lookup', async (req, res) => {
   try {
-    // --- 1. نظام حماية يعتمد على الـ IP ---
-    const userIP = req.headers['cf-connecting-ip'] || req.ip || 'anonymous';
+    // --- 1. نظام الحماية IP ---
+    const userIP = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
     const currentTime = Math.floor(Date.now() / 1000);
     const lastRequestTime = rateLimitMap.get(userIP) || 0;
 
@@ -48,8 +55,8 @@ app.all('/v1/lookup', async (req, res) => {
 
     rateLimitMap.set(userIP, currentTime);
 
-    // --- 2. جلب وتجهيز نص البحث (Query) ---
-    let query = req.method === 'GET' ? req.query.query : req.body.query;
+    // --- 2. جلب وتجهيز نص البحث (Query) من GET أو POST ---
+    let query = req.query.query || (req.body && req.body.query);
 
     if (!query) {
       return res.status(200).json({
@@ -75,14 +82,14 @@ app.all('/v1/lookup', async (req, res) => {
 
     const scrapePhone = provider !== 'رقم دولي' ? '+967' + cleanPhone : '+' + cleanPhone;
 
-    // --- المستوى 1: الكاش المحلي بالسيرفر ---
+    // --- المستوى 1: الكاش المحلي ---
     const cacheKey = `phone:${databasePhone}`;
     const cachedData = memoryCache.get(cacheKey);
     if (cachedData && cachedData.expiry > Date.now()) {
       return res.status(200).json(cachedData.data);
     }
 
-    // --- المستوى 2: قراءة من Supabase ---
+    // --- المستوى 2: Supabase ---
     const supabaseUrl = process.env.SUPABASE_URL || "https://qfcsaiyuyxhibidrrmha.supabase.co";
     const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
@@ -129,9 +136,7 @@ app.all('/v1/lookup', async (req, res) => {
               cached_at: new Date().toISOString()
             };
 
-            // تخزين في الكاش المحلي لمدة 3 أيام
             memoryCache.set(cacheKey, { data: finalResponse, expiry: Date.now() + 259200000 });
-
             return res.status(200).json(finalResponse);
           }
         }
@@ -140,7 +145,7 @@ app.all('/v1/lookup', async (req, res) => {
       }
     }
 
-    // --- المستوى 3: جلب البيانات مباشرة من الموقع ---
+    // --- المستوى 3: جلب البيانات مباشر ---
     let names = [];
     let success = false;
     let lastError = null;
@@ -162,7 +167,6 @@ app.all('/v1/lookup', async (req, res) => {
 
       if (response.ok) {
         const htmlContent = await response.text();
-        console.log(`📄 تم جلب المحتوى بطول: ${htmlContent.length} حرف`);
 
         if (htmlContent && htmlContent.length >= 50) {
           const extractedNames = extractNamesFromResponse(htmlContent);
@@ -171,35 +175,28 @@ app.all('/v1/lookup', async (req, res) => {
             names = extractedNames;
             success = true;
             source = 'direct_scrape';
-            console.log(`✅ تم استخراج ${names.length} اسم`);
           } else {
             const alternativeNames = extractNamesAlternative(htmlContent);
             if (alternativeNames.length > 0) {
               names = alternativeNames;
               success = true;
               source = 'direct_scrape_alternative';
-              console.log(`✅ تم استخراج ${names.length} اسم (طريقة بديلة)`);
             } else {
-              lastError = 'لم يتم العثور على أي أسماء مطابقة في محتوى الصفحة';
-              console.log('⚠️ ' + lastError);
+              lastError = 'لم يتم العثور على أي أسماء مطابقة';
             }
           }
         } else {
           lastError = 'استجابة فارغة من المصدر';
-          console.log('⚠️ ' + lastError);
         }
       } else {
         lastError = `خطأ في الاتصال: ${response.status}`;
-        console.log(`❌ ${lastError}`);
       }
     } catch (e) {
       lastError = `فشل الاتصال: ${e.message}`;
-      console.error('❌ ' + lastError);
     }
 
-    // التجربة عبر Firecrawl في حال الفشل
+    // Firecrawl Fallback
     if (!success || names.length === 0) {
-      console.log('🔄 محاولة الجلب عبر Firecrawl...');
       const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 
       if (FIRECRAWL_API_KEY) {
@@ -229,14 +226,12 @@ app.all('/v1/lookup', async (req, res) => {
                 names = extractedNames;
                 success = true;
                 source = 'firecrawl';
-                console.log(`✅ تم استخراج ${names.length} اسم عبر Firecrawl`);
               } else {
                 const alternativeNames = extractNamesAlternative(htmlContent);
                 if (alternativeNames.length > 0) {
                   names = alternativeNames;
                   success = true;
                   source = 'firecrawl_alternative';
-                  console.log(`✅ تم استخراج ${names.length} اسم عبر Firecrawl (طريقة بديلة)`);
                 }
               }
             }
@@ -257,7 +252,6 @@ app.all('/v1/lookup', async (req, res) => {
       });
     }
 
-    // تجهيز النتيجة الحالية
     const results = names.map(name => ({
       name: name,
       phone: databasePhone,
@@ -265,6 +259,10 @@ app.all('/v1/lookup', async (req, res) => {
       provider: provider,
       formattedDate: new Date().toLocaleDateString('ar-EG')
     }));
+
+    if (supabaseAnonKey) {
+      saveToSupabaseAsync(supabaseUrl, supabaseAnonKey, databasePhone, names, provider, source);
+    }
 
     const finalResponse = {
       success: true,
@@ -274,9 +272,7 @@ app.all('/v1/lookup', async (req, res) => {
       cached_at: new Date().toISOString()
     };
 
-    // حفظ في الكاش لمدة 3 أيام
     memoryCache.set(cacheKey, { data: finalResponse, expiry: Date.now() + 259200000 });
-
     return res.status(200).json(finalResponse);
 
   } catch (e) {
@@ -285,22 +281,36 @@ app.all('/v1/lookup', async (req, res) => {
       success: false,
       results: [],
       total: 0,
-      error: e.message,
-      stack: e.stack
+      error: e.message
     });
   }
 });
 
-// اختبار حالة السيرفر (Health Check)
-app.get('/', (req, res) => {
-  res.send('Server is running successfully on Render!');
-});
+async function saveToSupabaseAsync(supabaseUrl, supabaseAnonKey, phone, names, provider, source) {
+  try {
+    const records = names.map(name => ({
+      phone: phone,
+      name: name,
+      provider: provider,
+      source: source,
+      created_at: new Date().toISOString()
+    }));
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+    await fetch(`${supabaseUrl}/rest/v1/numbers`, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseAnonKey,
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(records)
+    });
+  } catch (err) {
+    console.error('❌ فشل حفظ الأسماء في Supabase:', err.message);
+  }
+}
 
-// --- الدوال المساعدة ---
 function extractNamesFromResponse(html) {
   const names = [];
   const numberedPattern = /(\d+)\s*[-–—]\s*([^\d\n<]+)/g;
