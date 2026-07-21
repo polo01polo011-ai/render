@@ -1,18 +1,18 @@
 {
-  "name": "render-stealth-scraper",
+  "name": "render-phone-lookup-backend",
   "version": "1.0.0",
-  "description": "سيرفر كشط متقدم مع Puppeteer و Stealth لـ Render",
+  "description": "Backend API for phone number lookup hosted on Render",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": "18.x"
-  },
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "puppeteer": "^22.6.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
