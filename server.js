@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch'); // أضف هذا السطر
+const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -41,6 +41,9 @@ async function handleSearchRequest(req, res) {
     // الاتصال بـ API النابكس
     const targetUrl = `https://3.nabx.net/wp-admin/admin-ajax.php?action=alosh_search&phone=%2B967${cleanQuery}`;
     
+    console.log(`🔍 Searching for: ${cleanQuery}`);
+    console.log(`📡 Target URL: ${targetUrl}`);
+    
     const response = await fetch(targetUrl);
     
     if (!response.ok) {
@@ -58,6 +61,7 @@ async function handleSearchRequest(req, res) {
     });
 
   } catch (error) {
+    console.error('❌ Error:', error.message);
     return res.status(500).json({
       success: false,
       error: 'حدث خطأ في جلب البيانات',
