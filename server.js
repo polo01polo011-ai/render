@@ -1,36 +1,34 @@
 const express = require('express');
 const cors = require('cors');
 
+// استخدام fetch المدمج في Node.js 18+ وفي حال عدم وجوده يتم استدعاء node-fetch
 const fetch = globalThis.fetch || require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// الثقة بالـ Proxy لتحديد الـ IP الصحيح عبر Cloudflare Worker
 app.set('trust proxy', true);
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ذاكرة بسيطة جداً لمؤشر الـ Rate Limit لمنع الإغراق الإجباري
 const rateLimitMap = new Map();
-const memoryCache = new Map();
-
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of rateLimitMap.entries()) {
     if (now - value > 10000) rateLimitMap.delete(key);
   }
-  for (const [key, value] of memoryCache.entries()) {
-    if (value.expiry < now) memoryCache.delete(key);
-  }
-}, 3600000);
+}, 60000);
 
-// قبول طلبات البحث على جميع المسارات الممكنة: /, /lookup, /v1/lookup
+// المسار الرئيسي لاستقبال طلبات البحث على جميع المسارات الممكنة: /, /lookup, /v1/lookup
 app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
   try {
     let query = req.query.query || (req.body && req.body.query);
 
-    // إذا لم يرسل المستخدم بحث، وكانت الفتحة على الجذر بدون استعلام، إرجاع رسالة نجاح السيرفر
+    // إذا لم يرسل المستخدم بحث وكانت الزيارة للجذر بدون استعلام
     if (!query && req.path === '/') {
       return res.send('Server is running successfully on Render!');
     }
@@ -44,13 +42,13 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
       });
     }
 
-    // --- 1. نظام الحماية IP ---
+    // --- 1. نظام الحماية IP (حد أدنى ثانيتين بين الطلبات) ---
     const userIP = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
     const currentTime = Math.floor(Date.now() / 1000);
     const lastRequestTime = rateLimitMap.get(userIP) || 0;
 
-    if (currentTime - lastRequestTime < 3) {
-      const secondsLeft = 3 - (currentTime - lastRequestTime);
+    if (currentTime - lastRequestTime < 2) {
+      const secondsLeft = 2 - (currentTime - lastRequestTime);
       return res.status(429).json({
         success: false,
         results: [],
@@ -62,7 +60,7 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
 
     rateLimitMap.set(userIP, currentTime);
 
-    // --- 2. تجهيز نص البحث ---
+    // --- 2. تنظيف وتجهيز رقم الهاتف ---
     let cleanPhone = String(query).trim().replace(/\s+/g, '').replace(/[-()]/g, '');
     if (cleanPhone.startsWith('00')) cleanPhone = cleanPhone.substring(2);
     else if (cleanPhone.startsWith('0')) cleanPhone = cleanPhone.substring(1);
@@ -78,78 +76,14 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
 
     const scrapePhone = provider !== 'رقم دولي' ? '+967' + cleanPhone : '+' + cleanPhone;
 
-    // --- المستوى 1: الكاش المحلي ---
-    const cacheKey = `phone:${databasePhone}`;
-    const cachedData = memoryCache.get(cacheKey);
-    if (cachedData && cachedData.expiry > Date.now()) {
-      return res.status(200).json(cachedData.data);
-    }
-
-    // --- المستوى 2: Supabase ---
-    const supabaseUrl = process.env.SUPABASE_URL || "https://qfcsaiyuyxhibidrrmha.supabase.co";
-    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-
-    if (supabaseAnonKey) {
-      try {
-        console.log(`🔎 استعلام قراءة من جدول numbers للرقم: ${databasePhone}`);
-
-        const dbResponse = await fetch(
-          `${supabaseUrl}/rest/v1/numbers?phone=eq.${databasePhone}&select=*`,
-          {
-            headers: {
-              'apikey': supabaseAnonKey,
-              'Authorization': `Bearer ${supabaseAnonKey}`,
-            }
-          }
-        );
-
-        if (dbResponse.ok) {
-          const existingRecords = await dbResponse.json();
-          if (existingRecords && existingRecords.length > 0) {
-            console.log(`🎯 تم العثور على الرقم مسبقاً في جدول numbers!`);
-
-            const results = existingRecords.map(rec => {
-              const name = rec.name || rec.contact_name || rec.full_name || rec.username || 'اسم غير معروف';
-              const phone = rec.phone || rec.phone_number || databasePhone;
-              const src = rec.source || rec.data_source || 'قاعدة البيانات المسبقة';
-              const prov = rec.provider || rec.telecom || provider;
-              const date = rec.created_at || rec.added_at || new Date().toISOString();
-
-              return {
-                name: name,
-                phone: phone,
-                source: src,
-                provider: prov,
-                formattedDate: new Date(date).toLocaleDateString('ar-EG')
-              };
-            });
-
-            const finalResponse = {
-              success: true,
-              results,
-              total: results.length,
-              source: 'database_cache',
-              cached_at: new Date().toISOString()
-            };
-
-            memoryCache.set(cacheKey, { data: finalResponse, expiry: Date.now() + 259200000 });
-            return res.status(200).json(finalResponse);
-          }
-        }
-      } catch (dbErr) {
-        console.error('❌ خطأ أثناء قراءة جدول numbers:', dbErr);
-      }
-    }
-
-    // --- المستوى 3: جلب البيانات مباشر ---
+    // --- 3. الجلب المباشر المباشر والحي من الموقع ---
     let names = [];
     let success = false;
     let lastError = null;
-    let source = '';
 
     try {
       const targetUrl = `https://3.nabx.net/wp-admin/admin-ajax.php?action=alosh_search&phone=${encodeURIComponent(scrapePhone)}`;
-      console.log(`📡 جلب مباشر من المصدر: ${targetUrl}`);
+      console.log(`📡 جلب مباشر وحي من المصدر: ${targetUrl}`);
 
       const response = await fetch(targetUrl, {
         method: 'GET',
@@ -170,72 +104,24 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
           if (extractedNames.length > 0) {
             names = extractedNames;
             success = true;
-            source = 'direct_scrape';
           } else {
             const alternativeNames = extractNamesAlternative(htmlContent);
             if (alternativeNames.length > 0) {
               names = alternativeNames;
               success = true;
-              source = 'direct_scrape_alternative';
             } else {
-              lastError = 'لم يتم العثور على أي أسماء مطابقة';
+              lastError = 'لم يتم العثور على أي أسماء مطابقة في محتوى الصفحة';
             }
           }
         } else {
           lastError = 'استجابة فارغة من المصدر';
         }
       } else {
-        lastError = `خطأ في الاتصال: ${response.status}`;
+        lastError = `خطأ في الاتصال بالموقع المصدر: ${response.status}`;
       }
     } catch (e) {
-      lastError = `فشل الاتصال: ${e.message}`;
-    }
-
-    // Firecrawl Fallback
-    if (!success || names.length === 0) {
-      const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
-
-      if (FIRECRAWL_API_KEY) {
-        try {
-          const targetUrl = `https://3.nabx.net/wp-admin/admin-ajax.php?action=alosh_search&phone=${encodeURIComponent(scrapePhone)}`;
-
-          const response = await fetch('https://api.firecrawl.dev/v2/scrape', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${FIRECRAWL_API_KEY}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              url: targetUrl,
-              formats: ['html'],
-              waitFor: 3000
-            })
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            const htmlContent = data.data?.html || data.html || data.content || '';
-
-            if (htmlContent && htmlContent.length >= 50) {
-              const extractedNames = extractNamesFromResponse(htmlContent);
-              if (extractedNames.length > 0) {
-                names = extractedNames;
-                success = true;
-                source = 'firecrawl';
-              } else {
-                const alternativeNames = extractNamesAlternative(htmlContent);
-                if (alternativeNames.length > 0) {
-                  names = alternativeNames;
-                  success = true;
-                  source = 'firecrawl_alternative';
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error('❌ خطأ في Firecrawl:', e);
-        }
-      }
+      lastError = `فشل الاتصال بالموقع المصدر: ${e.message}`;
+      console.error('❌ ' + lastError);
     }
 
     if (!success || names.length === 0) {
@@ -248,28 +134,21 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
       });
     }
 
+    // --- 4. إرجاع النتائج مباشرة ---
     const results = names.map(name => ({
       name: name,
       phone: databasePhone,
-      source: 'سجل الموقع (جديد)',
+      source: 'الموقع المباشر',
       provider: provider,
       formattedDate: new Date().toLocaleDateString('ar-EG')
     }));
 
-    if (supabaseAnonKey) {
-      saveToSupabaseAsync(supabaseUrl, supabaseAnonKey, databasePhone, names, provider, source);
-    }
-
-    const finalResponse = {
+    return res.status(200).json({
       success: true,
       results,
       total: results.length,
-      source: source,
-      cached_at: new Date().toISOString()
-    };
-
-    memoryCache.set(cacheKey, { data: finalResponse, expiry: Date.now() + 259200000 });
-    return res.status(200).json(finalResponse);
+      source: 'direct_scrape'
+    });
 
   } catch (e) {
     console.error('Error:', e);
@@ -282,30 +161,7 @@ app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
   }
 });
 
-async function saveToSupabaseAsync(supabaseUrl, supabaseAnonKey, phone, names, provider, source) {
-  try {
-    const records = names.map(name => ({
-      phone: phone,
-      name: name,
-      provider: provider,
-      source: source,
-      created_at: new Date().toISOString()
-    }));
-
-    await fetch(`${supabaseUrl}/rest/v1/numbers`, {
-      method: 'POST',
-      headers: {
-        'apikey': supabaseAnonKey,
-        'Authorization': `Bearer ${supabaseAnonKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
-      },
-      body: JSON.stringify(records)
-    });
-  } catch (err) {
-    console.error('❌ فشل حفظ الأسماء في Supabase:', err.message);
-  }
-}
+// --- الدوال المساعدة لمسح وتحليل نص HTML المجلوب من الموقع ---
 
 function extractNamesFromResponse(html) {
   const names = [];
