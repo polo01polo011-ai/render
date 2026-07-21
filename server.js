@@ -1,24 +1,20 @@
 const express = require('express');
 const cors = require('cors');
 
-// استخدام fetch المدمج في Node.js
 const fetch = globalThis.fetch || require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// الثقة بالـ Proxy عبر Cloudflare
 app.set('trust proxy', true);
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ذاكرة مؤقتة للـ Rate Limit والنتائج
 const rateLimitMap = new Map();
 const memoryCache = new Map();
 
-// تنظيف الكاش دورياً
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of rateLimitMap.entries()) {
@@ -29,14 +25,25 @@ setInterval(() => {
   }
 }, 3600000);
 
-// صفحة الرئيسية للاختبار
-app.get('/', (req, res) => {
-  res.send('Server is running successfully on Render!');
-});
-
-// المسار الرئيسي لاستقبال طلبات البحث (يقبل GET و POST)
-app.all('/v1/lookup', async (req, res) => {
+// قبول طلبات البحث على جميع المسارات الممكنة: /, /lookup, /v1/lookup
+app.all(['/', '/lookup', '/v1/lookup'], async (req, res) => {
   try {
+    let query = req.query.query || (req.body && req.body.query);
+
+    // إذا لم يرسل المستخدم بحث، وكانت الفتحة على الجذر بدون استعلام، إرجاع رسالة نجاح السيرفر
+    if (!query && req.path === '/') {
+      return res.send('Server is running successfully on Render!');
+    }
+
+    if (!query) {
+      return res.status(200).json({
+        success: false,
+        results: [],
+        total: 0,
+        error: 'البحث فارغ'
+      });
+    }
+
     // --- 1. نظام الحماية IP ---
     const userIP = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
     const currentTime = Math.floor(Date.now() / 1000);
@@ -55,18 +62,7 @@ app.all('/v1/lookup', async (req, res) => {
 
     rateLimitMap.set(userIP, currentTime);
 
-    // --- 2. جلب وتجهيز نص البحث (Query) من GET أو POST ---
-    let query = req.query.query || (req.body && req.body.query);
-
-    if (!query) {
-      return res.status(200).json({
-        success: false,
-        results: [],
-        total: 0,
-        error: 'البحث فارغ'
-      });
-    }
-
+    // --- 2. تجهيز نص البحث ---
     let cleanPhone = String(query).trim().replace(/\s+/g, '').replace(/[-()]/g, '');
     if (cleanPhone.startsWith('00')) cleanPhone = cleanPhone.substring(2);
     else if (cleanPhone.startsWith('0')) cleanPhone = cleanPhone.substring(1);
@@ -376,3 +372,7 @@ function detectProvider(cleanPhone) {
   if (/^(70)[0-9]{7}$/.test(cleanPhone)) return 'واي';
   return 'رقم دولي';
 }
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
