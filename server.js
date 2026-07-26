@@ -67,6 +67,7 @@ const cache = new MemoryCache();
 
 console.log('🚀 جاري تشغيل الخادم...');
 console.log(`🔥 Firecrawl API Key: ${FIRECRAWL_API_KEY ? '✅ موجود' : '❌ غير موجود'}`);
+console.log(`🔑 المفتاح: ${FIRECRAWL_API_KEY.substring(0, 15)}...`);
 
 // ==========================================================
 // 🚀 Middleware
