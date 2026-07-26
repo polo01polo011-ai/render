@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: phone-lookup-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: FIRECRAWL_API_KEY
+        value: fc-b11dd2129b814b3a91ed3903d3b1c8fd
+      - key: PORT
+        value: 3000
